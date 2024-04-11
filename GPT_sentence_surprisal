@@ -1,0 +1,125 @@
+###chain rules
+
+import torch
+from transformers import GPT2Tokenizer, GPT2LMHeadModel
+import numpy as np
+import nltk
+import pandas as pd
+
+# Load pre-trained mGPT model and tokenizer
+tokenizer = GPT2Tokenizer.from_pretrained('ai-forever/mGPT')
+model = GPT2LMHeadModel.from_pretrained('ai-forever/mGPT')
+model.eval()
+
+def compute_token_probability(tokenized_text, idx, original_token_id):
+    input_ids = torch.tensor([tokenized_text[:idx+1]])
+    with torch.no_grad():
+        outputs = model(input_ids)
+        predictions = outputs.logits[0, idx]
+    original_token_prob = torch.nn.functional.softmax(predictions, dim=0)[original_token_id].item()
+    return original_token_prob
+
+def compute_sentence_probability(context, sentence):
+    tokenized_context = tokenizer.encode(context, add_special_tokens=False)
+    tokenized_sentence = tokenizer.encode(sentence, add_special_tokens=False)
+    tokenized_text = tokenized_context + tokenized_sentence
+    sentence_prob = 1
+    for idx in range(len(tokenized_context), len(tokenized_context) + len(tokenized_sentence)):
+        token_prob = compute_token_probability(tokenized_text, idx, tokenized_sentence[idx - len(tokenized_context)])
+        sentence_prob *= token_prob
+    return sentence_prob
+
+filelist = ["Janus", "shaka", "doping", "thy", "worlden", "monocole", "winetaste", "orangejuice", "beekeeping", "nationalflag", "union", "vr"]
+appended_data = []
+
+for idx, filename in enumerate(filelist, start=1):
+    with open(filename, "r", encoding="utf-8") as file:
+        text = file.read()
+
+    sentences = nltk.sent_tokenize(text)
+    surprisals = []
+    for i, sentence in enumerate(sentences):
+        if i == 0:  # If it's the first sentence, set surprisal to "NA"
+            surprisals.append("NA")
+        else:
+            left_context = ' '.join(sentences[:i])
+            probability = compute_sentence_probability(left_context, sentence)
+            surprisal = -np.log(probability)
+            #avg_surprisal = surprisal / len(tokenizer.tokenize(sentence))  # Normalize by sentence length
+            surprisals.append(surprisal)
+
+    df = pd.DataFrame(surprisals, columns=['avg_sent_surp_per_token'])
+    df['sent_No'] = [f"{idx}_{i}" for i in range(1, len(sentences) + 1)]
+    appended_data.append(df)
+
+appended_data = pd.concat(appended_data)
+appended_data.to_csv('GPT_cr_surp.csv', index=False)
+
+
+###NLL
+
+import torch
+from transformers import GPT2Tokenizer, GPT2LMHeadModel
+import numpy as np
+import nltk
+import pandas as pd
+
+# Load pre-trained mGPT model and tokenizer
+tokenizer = GPT2Tokenizer.from_pretrained('ai-forever/mGPT')
+model = GPT2LMHeadModel.from_pretrained('ai-forever/mGPT')
+model.eval()
+
+def compute_sentence_probability(context, sentence):
+    # Combine the context and the sentence
+    combined_text = context + " " + sentence
+    tokenized_text = tokenizer.encode(combined_text, return_tensors='pt')
+
+    # Compute the model's output (logits)
+    with torch.no_grad():
+        outputs = model(tokenized_text, labels=tokenized_text)
+        logits = outputs.logits
+
+    # Shift the logits and labels to align for computing loss
+    shift_logits = logits[..., :-1, :].contiguous()
+    shift_labels = tokenized_text[..., 1:].contiguous()
+
+    # Calculate the loss (negative log likelihood)
+    loss_fct = torch.nn.CrossEntropyLoss(reduction='none')
+    loss = loss_fct(shift_logits.view(-1, shift_logits.size(-1)), shift_labels.view(-1))
+
+    # Sum the log likelihoods for the sentence tokens
+    sentence_nll = loss[len(context.split()):].sum()
+
+    # Convert NLL to probability
+    probability = torch.exp(-sentence_nll).item()
+
+    return probability
+
+
+
+filelist = ["Janus", "shaka", "doping", "thy", "worlden", "monocole", "winetaste", "orangejuice", "beekeeping", "nationalflag", "union", "vr"]
+appended_data = []
+
+for idx, filename in enumerate(filelist, start=1):
+    with open(filename, "r", encoding="utf-8") as file:
+        text = file.read()
+
+    sentences = nltk.sent_tokenize(text)
+    surprisals = []
+    for i, sentence in enumerate(sentences):
+        if i == 0:  # If it's the first sentence, set surprisal to "NA"
+            surprisals.append("NA")
+        else:
+            left_context = ' '.join(sentences[:i])
+            probability = compute_sentence_probability(left_context, sentence)
+            epsilon = 1e-10
+            surprisal = -np.log(probability + epsilon)
+            #avg_surprisal = surprisal / len(tokenizer.tokenize(sentence))  # Normalize by sentence length
+            surprisals.append(surprisal)
+
+    df = pd.DataFrame(surprisals, columns=['gpt_nll_sp'])
+    df['sent_No'] = [f"{idx}_{i}" for i in range(1, len(sentences) + 1)]
+    appended_data.append(df)
+
+appended_data = pd.concat(appended_data)
+appended_data.to_csv('GPT_nll_surp.csv', index=False)
