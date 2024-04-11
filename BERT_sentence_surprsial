@@ -1,0 +1,80 @@
+###BERT
+import torch
+from transformers import BertTokenizer, BertForMaskedLM
+import numpy as np
+import nltk
+import pandas as pd
+
+# Load m-BERT model and tokenizer
+tokenizer = BertTokenizer.from_pretrained('bert-base-multilingual-cased')
+model = BertForMaskedLM.from_pretrained('bert-base-multilingual-cased')
+model.eval()
+
+def compute_sentence_probability(context, sentence):
+    combined_text = context + " " + sentence
+    tokenized_text = tokenizer.tokenize(combined_text)
+
+    # Truncate the tokenized text to a maximum length of 510 (512 including [CLS] and [SEP])
+    max_length = 510  # 512 - 2 to account for [CLS] and [SEP]
+    if len(tokenized_text) > max_length:
+        tokenized_text = tokenized_text[:max_length]
+
+    tokenized_text.insert(0, '[CLS]')
+    tokenized_text.append('[SEP]')
+
+    sentence_start = len(tokenizer.tokenize(context)) + 1  # +1 for [CLS]
+    sentence_start = min(sentence_start, max_length + 1)  # Adjust if it exceeds the max length
+
+    sentence_probability = 1.0
+
+    for i in range(sentence_start, len(tokenized_text) - 1):  # Exclude [CLS] and [SEP]
+        masked_text = tokenized_text.copy()
+        masked_text[i] = '[MASK]'
+        indexed_tokens = tokenizer.convert_tokens_to_ids(masked_text)
+        tokens_tensor = torch.tensor([indexed_tokens])
+
+        with torch.no_grad():
+            outputs = model(tokens_tensor)
+            predictions = outputs[0]
+        
+        predicted_index = tokenizer.convert_tokens_to_ids([tokenized_text[i]])[0]
+        predicted_prob = torch.nn.functional.softmax(predictions[0, i], dim=-1)[predicted_index].item()
+        sentence_probability *= predicted_prob
+
+    return sentence_probability
+
+
+
+def compute_sentence_nll(context, sentence):
+    probability = compute_sentence_probability(context, sentence)
+    epsilon = 1e-10
+    nll = -np.log(probability + epsilon)
+    
+    return nll
+
+filelist = ["Janus", "shaka", "doping", "thy", "worlden", "monocole", "winetaste", "orangejuice", "beekeeping", "nationalflag", "union", "vr"]
+appended_data = []
+
+for idx, filename in enumerate(filelist, start=1):
+    with open(filename, "r", encoding="utf-8") as file:
+        text = file.read()
+
+    sentences = nltk.sent_tokenize(text)
+    surprisals = []  # Initialize surprisals for each file
+    context = ""
+    for i, sentence in enumerate(sentences):
+        if i == 0:  
+            surprisals.append("NA")  # For the first sentence, there's no left context
+        else:
+            nll = compute_sentence_nll(context, sentence)
+            avg_nll = nll / len(tokenizer.tokenize(sentence))
+            surprisals.append(avg_nll)
+        context += " " + sentence  # Update context with the current sentence
+
+    df = pd.DataFrame(surprisals, columns=['bert_nll_sp'])
+    df['sent_No'] = [f"{idx}_{i+1}" for i in range(len(sentences))]  # Adjust the range to match the length of sentences
+    appended_data.append(df)
+
+
+combined_df = pd.concat(appended_data)
+combined_df.to_csv('mBERT_nll_sp_nm.csv', index=False)
