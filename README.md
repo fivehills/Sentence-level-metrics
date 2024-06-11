@@ -1,5 +1,7 @@
 # Sentence-relevance-and-sentence-surprisal
 
+## Use Multilingual LLMs to realize the computation for sentence-level metrics
+
 ## The sentence-surprisal script:
 is to compute sentence-level surprisal for mutiple language. The basic methods are relying on chain rule and negative log-likelihood from word probablity.
 
